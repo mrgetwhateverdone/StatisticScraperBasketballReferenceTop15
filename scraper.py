@@ -92,13 +92,23 @@ def parse_data(html_content, stat_id):
         for row in rows:
             player_cell = row.find('td', {'class': 'who'})
             if player_cell:
-                player = player_cell.text.strip()
-                team = player_cell.find('span', {'class': 'desc'}).text.strip()[1:-1]  # Remove parentheses
+                # Extract just the player name without team info
+                player_name = player_cell.find('a').text.strip() if player_cell.find('a') else ""
+                
+                # Extract team abbreviation from the text
+                team_span = player_cell.find('span', {'class': 'desc'})
+                if team_span:
+                    team_text = team_span.text.strip()
+                    # The text is in format like "(PHO)", so we extract just the team code
+                    team_abbr = team_text.strip('()') if team_text else ""
+                else:
+                    team_abbr = ""
+                
                 value_cell = row.find('td', {'class': 'value'})
                 value = float(value_cell.text.strip()) if value_cell else None
                 
-                players.append(player)
-                teams.append(team)
+                players.append(player_name)
+                teams.append(team_abbr)
                 values.append(value)
         
         return pd.DataFrame({
