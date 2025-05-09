@@ -1,8 +1,26 @@
-# Basketball Reference Top 25 Leaders Scraper
+# Basketball Reference Top 15 Leaders Scraper
 
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
+import os
+import sys
+import datetime
+import time
+from urllib.error import URLError, HTTPError
+import logging
+
+# This part of the code sets up logging configuration for tracking errors and important events.
+# It helps in debugging and maintaining the application.
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("scraper.log"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger("basketball_scraper")
 
 # This part of the code defines the base URL for the NBA 2025 leaders page on Basketball Reference.
 # It sets up the target webpage we will be scraping data from.
@@ -22,89 +40,202 @@ STAT_MAP = {
     "free throw percentage": "leaders_ft_pct"
 }
 
-def fetch_page(url):
-    """
-    This part of the code defines a function to fetch the webpage content using the requests library.
-    It sends an HTTP GET request to the specified URL and returns the HTML content if successful.
-    If there's an error, it prints a message and returns None to indicate failure.
-    """
+# This part of the code creates a directory to store CSV files if it doesn't already exist.
+# It organizes the data output files in a structured manner.
+def create_output_directory():
+    """Create directory for storing CSV outputs if it doesn't exist."""
+    os.makedirs('data', exist_ok=True)
+    logger.info("Created output directory if it didn't exist.")
+
+# This part of the code implements a function to fetch data from the Basketball Reference website.
+# It includes error handling for various network issues and retries on temporary failures.
+def fetch_data(url, max_retries=3, delay=2):
+    """Fetch data from the specified URL with retry mechanism."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+    
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"Fetching data from {url}, attempt {attempt+1}/{max_retries}")
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()  # Raise exception for 4XX/5XX responses
+            return response.text
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Request failed: {e}")
+            if attempt < max_retries - 1:
+                wait_time = delay * (attempt + 1)  # Exponential backoff
+                logger.info(f"Retrying in {wait_time} seconds...")
+                time.sleep(wait_time)
+            else:
+                logger.error(f"Failed to fetch data after {max_retries} attempts.")
+                raise
+
+# This part of the code parses the HTML content to extract the relevant statistics table.
+# It converts the raw HTML into structured data that can be analyzed.
+def parse_data(html_content, stat_id):
+    """Parse HTML content and extract the relevant statistics table."""
     try:
-        response = requests.get(url)
-        response.raise_for_status()
-        return response.text
-    except requests.RequestException as e:
-        print(f"Error fetching the page: {e}")
+        soup = BeautifulSoup(html_content, 'html.parser')
+        table = soup.find('div', {'id': stat_id})
+        
+        if not table:
+            logger.error(f"Could not find table with ID: {stat_id}")
+            return None
+            
+        players = []
+        teams = []
+        values = []
+        
+        rows = table.find_all('tr')[1:16]  # Top 15 players, skipping header row
+        
+        for row in rows:
+            player_cell = row.find('td', {'class': 'who'})
+            if player_cell:
+                player = player_cell.text.strip()
+                team = player_cell.find('span', {'class': 'desc'}).text.strip()[1:-1]  # Remove parentheses
+                value_cell = row.find('td', {'class': 'value'})
+                value = float(value_cell.text.strip()) if value_cell else None
+                
+                players.append(player)
+                teams.append(team)
+                values.append(value)
+        
+        return pd.DataFrame({
+            'Player': players,
+            'Team': teams,
+            'Value': values
+        })
+    except Exception as e:
+        logger.error(f"Error parsing HTML: {e}")
         return None
 
-def parse_leaders(html_content, stat_id):
-    """
-    This part of the code defines a function to parse the HTML content and extract leader data for a specific statistic.
-    It uses BeautifulSoup to navigate the HTML structure, finds the table with the given stat_id,
-    and extracts player names and their corresponding statistic values into a list of dictionaries.
-    """
-    soup = BeautifulSoup(html_content, 'html.parser')
-    leaders_table = soup.find('div', id=stat_id)
-    leaders = []
+# This part of the code saves the extracted data to a CSV file for future use.
+# It provides data persistence and allows for easy sharing or further analysis.
+def save_to_csv(df, stat_name):
+    """Save the dataframe to a CSV file."""
+    if df is None or df.empty:
+        logger.warning("No data to save to CSV.")
+        return None
     
-    if leaders_table:
-        rows = leaders_table.find_all('tr')[1:16]  # Skip header row, limit to top 15
-        for row in rows:
-            cols = row.find_all('td')
-            if len(cols) >= 2:
-                player = cols[1].text.strip()
-                value = cols[2].text.strip()
-                leaders.append({'Player': player, 'Value': value})
-    return leaders
+    # Create a valid filename from the stat name
+    filename = stat_name.replace(" ", "_").lower()
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    filepath = f"data/{filename}_{timestamp}.csv"
+    
+    try:
+        df.to_csv(filepath, index=False)
+        logger.info(f"Data saved to {filepath}")
+        return filepath
+    except Exception as e:
+        logger.error(f"Error saving CSV: {e}")
+        return None
 
-def display_leaders(leaders, stat):
-    """
-    This part of the code defines a function to display the scraped data in a formatted table using pandas.
-    It converts the list of dictionaries into a DataFrame and prints it with a title based on the selected statistic.
-    If no data is available, it informs the user.
-    """
-    if leaders:
-        df = pd.DataFrame(leaders)
-        df.index += 1  # Start index from 1 for ranking
-        print(f"\nTop 15 Leaders for {stat.title()}:\n")
-        print(df.to_string())
-    else:
-        print(f"No data available for {stat}.")
-
-def main():
-    """
-    This part of the code defines the main function that orchestrates the scraping process.
-    It fetches the webpage, presents a menu for statistic selection to the user, and based on the input,
-    it calls functions to parse and display the data for the chosen statistic. It includes error handling for invalid inputs
-    and allows the user to exit the program.
-    """
-    html_content = fetch_page(BASE_URL)
-    if not html_content:
-        return
-
-    while True:
-        print("\nSelect a statistic to view the top 15 leaders:")
-        for i, stat in enumerate(STAT_MAP.keys(), 1):
-            print(f"{i}. {stat.title()}")
-        print(f"{len(STAT_MAP) + 1}. Exit")
+# This part of the code combines all the functions to scrape a specific statistic.
+# It orchestrates the data retrieval, processing, and storage process.
+def scrape_statistic(stat_name):
+    """Scrape data for the specified statistic and save to CSV."""
+    if stat_name.lower() not in STAT_MAP:
+        logger.error(f"Invalid statistic name: {stat_name}")
+        return None, None
+    
+    stat_id = STAT_MAP[stat_name.lower()]
+    
+    try:
+        html_content = fetch_data(BASE_URL)
+        df = parse_data(html_content, stat_id)
         
-        try:
-            choice = int(input("\nEnter your choice (1-10): "))
-            if choice == len(STAT_MAP) + 1:
-                print("Exiting program.")
-                break
-            if 1 <= choice <= len(STAT_MAP):
-                selected_stat = list(STAT_MAP.keys())[choice - 1]
-                stat_id = STAT_MAP[selected_stat]
-                leaders = parse_leaders(html_content, stat_id)
-                display_leaders(leaders, selected_stat)
-            else:
-                print("Invalid choice. Please select a number between 1 and 10.")
-        except ValueError:
-            print("Invalid input. Please enter a number.")
+        if df is not None and not df.empty:
+            # Rename Value column to the actual statistic name
+            df = df.rename(columns={'Value': stat_name.title()})
+            
+            csv_path = save_to_csv(df, stat_name)
+            
+            return df, csv_path
+        else:
+            logger.warning(f"No data found for {stat_name}")
+            return None, None
+    except Exception as e:
+        logger.error(f"Error scraping {stat_name}: {e}")
+        return None, None
 
+# This part of the code displays available statistics to the user when prompted.
+# It helps users understand their options and make valid selections.
+def display_available_stats():
+    """Display the available statistics that can be scraped."""
+    print("\nAvailable Statistics:")
+    for i, stat in enumerate(sorted(STAT_MAP.keys()), 1):
+        print(f"{i}. {stat.title()}")
+
+# This part of the code runs the main program loop, collecting user input and displaying results.
+# It creates an interactive interface for users to select statistics to view.
+def main():
+    """Main function to run the scraper."""
+    try:
+        create_output_directory()
+        
+        print("Basketball Reference Top 15 Leaders Scraper")
+        print("===========================================")
+        
+        while True:
+            display_available_stats()
+            
+            choice = input("\nWhat statistic would you like to see? (type 'quit' to exit): ").strip().lower()
+            
+            if choice == 'quit':
+                print("Exiting program. Goodbye!")
+                break
+                
+            # Handle numeric input (convert to stat name)
+            if choice.isdigit():
+                stats_list = sorted(STAT_MAP.keys())
+                choice_idx = int(choice) - 1
+                if 0 <= choice_idx < len(stats_list):
+                    choice = stats_list[choice_idx]
+                else:
+                    print(f"Invalid choice. Please enter a number between 1 and {len(stats_list)}.")
+                    continue
+            
+            if choice in STAT_MAP:
+                print(f"\nFetching top 15 leaders for {choice}...")
+                
+                try:
+                    df, csv_path = scrape_statistic(choice)
+                    
+                    if df is not None:
+                        print(f"\nTop 15 {choice.title()} Leaders:")
+                        print("===============================")
+                        
+                        # Format the output for better readability
+                        for i, (_, row) in enumerate(df.iterrows(), 1):
+                            stat_value = row[choice.title()]
+                            if "percentage" in choice:
+                                formatted_value = f"{stat_value:.1f}%"
+                            else:
+                                formatted_value = f"{stat_value:.1f}"
+                                
+                            print(f"{i}. {row['Player']} ({row['Team']}): {formatted_value}")
+                        
+                        if csv_path:
+                            print(f"\nData saved to: {csv_path}")
+                    else:
+                        print(f"Could not retrieve data for {choice}.")
+                        
+                except Exception as e:
+                    print(f"An error occurred: {e}")
+            else:
+                print("Invalid choice. Please select from the available statistics.")
+            
+            print("\n" + "-" * 50)
+    except KeyboardInterrupt:
+        print("\nProgram interrupted. Exiting gracefully.")
+    except Exception as e:
+        logger.critical(f"Unhandled exception: {e}")
+        print(f"An unexpected error occurred: {e}")
+    finally:
+        print("Thank you for using the Basketball Reference Scraper!")
+
+# This part of the code ensures the script runs as a standalone program when executed directly.
+# It's the entry point for the application.
 if __name__ == "__main__":
-    """
-    This part of the code checks if the script is being run directly (not imported as a module).
-    If so, it calls the main function to start the program execution.
-    """
     main() 

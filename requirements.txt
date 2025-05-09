@@ -1,4 +1,4 @@
-# Requirements for BasketballReferenceTop25Scraper
+# Requirements for BasketballReferenceTop15Scraper
 
 # This part of the code lists the Python packages required to run the scraper.
 # These packages are essential for web requests, HTML parsing, and data manipulation.
