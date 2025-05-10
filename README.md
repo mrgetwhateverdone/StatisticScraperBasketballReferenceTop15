@@ -95,8 +95,8 @@ The application includes comprehensive error handling:
 This project is open source and available under the MIT License.
 
 ## Acknowledgments
-
-Inspired by the [basketball_reference_web_scraper](https://github.com/jaebradley/basketball_reference_web_scraper) by Jae Bradley.
+- Data provided by Basketball Reference(https://www.basketball-reference.com/). 
+- No copyright infringement is intended, this is for educational purposes.
 
 ## Future Enhancements
 
